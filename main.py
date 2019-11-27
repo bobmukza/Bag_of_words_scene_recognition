@@ -61,7 +61,7 @@ def projSceneRecBoW():
 
     # This is the path the script will look at to load images from.
 	#data_path = '../data/'
-    data_path = '/Users/ysb/Documents/Scene_Recognition_With_Bag_Of_Words/'
+    data_path = '/Users/ysb/Documents/Scene_Recognition_With_Bag_Of_Words/data/'
 	
 
     # This is the list of categories / directories to use. The categories are

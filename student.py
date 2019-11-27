@@ -4,51 +4,12 @@ import matplotlib.pyplot as plt
 from skimage.io import imread
 from skimage.color import rgb2grey
 from skimage.feature import hog
+from numpy.linalg import norm
 from skimage.transform import resize
-from sklearn.cluster import KMeans
+from sklearn.cluster import KMeans,MiniBatchKMeans
 from sklearn.svm import LinearSVC
 from skimage import data,exposure
-from sklearn.metrics.pairwise import euclidean_distances
-
-# HOG settings
-z = 3
-y = 8
-orientations = 9
-
-# https://stackoverflow.com/a/39382475
-def crop_center(img,cropx,cropy):
-    y,x = img.shape
-    startx = x//2-(cropx//2)
-    starty = y//2-(cropy//2)
-    return img[starty:starty+cropy,startx:startx+cropx]
-
-def myhog(image, visualize=False):
-    return hog(
-        image,
-        orientations=orientations,
-        pixels_per_cell=(y, y),
-        cells_per_block=(z, z),
-        transform_sqrt=True,
-        block_norm="L1",
-        visualize=visualize,
-    ).reshape(-1, z*z*orientations).astype('float32')
-
-def show_image(image):
-    fd, hog_image = myhog(image, True)
-
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8, 4), sharex=True, sharey=True)
-
-    ax1.axis('off')
-    ax1.imshow(image, cmap=plt.cm.gray)
-    ax1.set_title('Input image')
-
-    # Rescale histogram for better display
-    hog_image_rescaled = exposure.rescale_intensity(hog_image, in_range=(0, 10))
-
-    ax2.axis('off')
-    ax2.imshow(hog_image_rescaled, cmap=plt.cm.gray)
-    ax2.set_title('Histogram of Oriented Gradients')
-    plt.show()
+from scipy.spatial.distance import cdist
 
 def build_vocabulary(image_paths, vocab_size):
     '''
@@ -122,22 +83,23 @@ def build_vocabulary(image_paths, vocab_size):
 
     #TODO: Implement this function!
 
-    a = []
-    for image_path in image_paths:
-        img = imread(image_path)
-        sz = min(img.shape[0], img.shape[1])
-        img = resize(crop_center(img, sz, sz), (256, 256))
-
-        blocks = myhog(img)
-        a.append(blocks)
-
-    a = np.concatenate(a, axis=0)
-
     print("Clustering..")
+    
+    image_list = [imread(file) for file in image_paths]
 
-    km = KMeans(n_clusters=vocab_size, max_iter=50, verbose=True, n_init=3).fit(a)
-
-    return km.cluster_centers_
+    cells_per_block = (2,2)
+    z=cells_per_block[0]
+    pixels_per_cell=(4,4)
+    feature_vectors_images = []
+    for image in image_list:
+	    feature_vectors = hog(image, feature_vector=True,pixels_per_cell=pixels_per_cell,cells_per_block=cells_per_block, visualize=False)
+	    feature_vectors = feature_vectors.reshape(-1,z*z*9)
+	    feature_vectors_images.append(feature_vectors)
+    all_feature_vectors = np.vstack(feature_vectors_images)
+    kmeans = MiniBatchKMeans(n_clusters=vocab_size,max_iter=50).fit(all_feature_vectors)
+    vocabulary = np.vstack(kmeans.cluster_centers_)
+	
+    return vocabulary
 
 def get_bags_of_words(image_paths):
     '''
@@ -173,28 +135,31 @@ def get_bags_of_words(image_paths):
     print('Loaded vocab from file.')
 
     #TODO: Implement this function!
-
-    vocab_size = vocab.shape[0]
-
-    a = []
-    for i, image_path in enumerate(image_paths):
-        if i % 100 == 0:
-            print('generating BOW.. (' +str(i/len(image_paths)) + '%)')
-
-        img = imread(image_path)
-        sz = min(img.shape[0],img.shape[1])
-        img = resize(crop_center(img,sz,sz) ,(256,256))
-
-        blocks = myhog(img)
-
-        v = [0] * vocab_size
-        for block in blocks:
-            idx = np.argmin(euclidean_distances(vocab,np.array([block])))
-            v[idx] += 1
-		
-        a.append(np.array(v))
     
-    return np.array(a)
+    vocab_length = vocab.shape[0]
+    image_list = [imread(file) for file in image_paths]
+
+    #Instantiate empty array
+    images_histograms=np.zeros((len(image_list),vocab_length))
+
+    cells_per_block = (2,2)
+    z=cells_per_block[0]
+    pixels_per_cell=(4,4)
+    feature_vectors_images = []
+
+    #find histogram for each image
+    for i,image in enumerate(image_list):
+	    feature_vectors = hog(image, feature_vector=True,pixels_per_cell=pixels_per_cell,cells_per_block=cells_per_block, visualize=False)
+	    feature_vectors = feature_vectors.reshape(-1,z*z*9)
+	    histogram = np.zeros(vocab_length)
+	    distances = cdist(feature_vectors,vocab)
+	    closest_vocab = np.argsort(distances, axis=1)[:,0]
+	    indices,counts = np.unique(closest_vocab,return_counts=True)
+	    histogram[indices] += counts
+	    histogram = histogram / norm(histogram)
+	    images_histograms[i] = histogram
+    
+    return images_histograms
 
 def svm_classify(train_image_feats, train_labels, test_image_feats):
     '''
@@ -221,9 +186,8 @@ def svm_classify(train_image_feats, train_labels, test_image_feats):
 
     # TODO: Implement this function!
     
-    print("doing SVC..")
+    print("SVC...")
 
-    clf = LinearSVC()
-    clf.fit(train_image_feats, np.array(train_labels))
+    svm = LinearSVC(random_state=0,tol=1e-5).fit(train_image_feats, train_labels)
 
-    return clf.predict(test_image_feats)
+    return svm.predict(test_image_feats)
